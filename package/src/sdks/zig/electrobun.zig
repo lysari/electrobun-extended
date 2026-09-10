@@ -284,6 +284,7 @@ pub const WindowOptions = struct {
     style: WindowStyle = .{},
     title_bar_style: []const u8 = "default",
     transparent: bool = false,
+    kiosk: bool = false,
     hidden: bool = false,
     activate: bool = true,
     centered: bool = false,
@@ -948,6 +949,8 @@ pub const Core = struct {
         is_window_maximized: IsWindowMaximizedFn,
         set_window_full_screen: SetWindowFullScreenFn,
         is_window_full_screen: IsWindowFullScreenFn,
+        set_window_kiosk: SetWindowFullScreenFn,
+        is_window_kiosk: IsWindowFullScreenFn,
         set_window_always_on_top: SetWindowAlwaysOnTopFn,
         is_window_always_on_top: IsWindowAlwaysOnTopFn,
         set_window_visible_on_all_workspaces: SetWindowVisibleOnAllWorkspacesFn,
@@ -1088,6 +1091,8 @@ pub const Core = struct {
                 .is_window_maximized = lib.lookup(IsWindowMaximizedFn, "isWindowMaximized") orelse return error.MissingCoreSymbol,
                 .set_window_full_screen = lib.lookup(SetWindowFullScreenFn, "setWindowFullScreen") orelse return error.MissingCoreSymbol,
                 .is_window_full_screen = lib.lookup(IsWindowFullScreenFn, "isWindowFullScreen") orelse return error.MissingCoreSymbol,
+                .set_window_kiosk = lib.lookup(SetWindowFullScreenFn, "setWindowKiosk") orelse return error.MissingCoreSymbol,
+                .is_window_kiosk = lib.lookup(IsWindowFullScreenFn, "isWindowKiosk") orelse return error.MissingCoreSymbol,
                 .set_window_always_on_top = lib.lookup(SetWindowAlwaysOnTopFn, "setWindowAlwaysOnTop") orelse return error.MissingCoreSymbol,
                 .is_window_always_on_top = lib.lookup(IsWindowAlwaysOnTopFn, "isWindowAlwaysOnTop") orelse return error.MissingCoreSymbol,
                 .set_window_visible_on_all_workspaces = lib.lookup(SetWindowVisibleOnAllWorkspacesFn, "setWindowVisibleOnAllWorkspaces") orelse return error.MissingCoreSymbol,
@@ -1304,6 +1309,11 @@ pub const Core = struct {
             return errorFromLastError(self.lastError());
         }
 
+        if (options.kiosk) {
+            self.symbols.set_window_kiosk(window_id, true);
+            try self.ensureLastCallSucceeded();
+        }
+
         return window_id;
     }
 
@@ -1349,6 +1359,15 @@ pub const Core = struct {
 
     pub fn isWindowFullScreen(self: *Core, window_id: u32) bool {
         return self.symbols.is_window_full_screen(window_id);
+    }
+
+    pub fn setWindowKiosk(self: *Core, window_id: u32, kiosk: bool) !void {
+        self.symbols.set_window_kiosk(window_id, kiosk);
+        try self.ensureLastCallSucceeded();
+    }
+
+    pub fn isWindowKiosk(self: *Core, window_id: u32) bool {
+        return self.symbols.is_window_kiosk(window_id);
     }
 
     pub fn setWindowAlwaysOnTop(self: *Core, window_id: u32, always_on_top: bool) !void {

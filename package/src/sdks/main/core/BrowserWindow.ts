@@ -46,6 +46,8 @@ export type WindowOptionsType<T = undefined> = {
 	passthrough: boolean;
 	// Enables macOS system spell checking for native WKWebView content.
 	spellCheck: boolean;
+	/** Start the window in restricted fullscreen kiosk mode. */
+	kiosk: boolean;
 	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
@@ -70,6 +72,7 @@ const defaultOptions: WindowOptionsType = {
 	transparent: false,
 	passthrough: false,
 	spellCheck: false,
+	kiosk: false,
 	hidden: false,
 	navigationRules: null,
 	sandbox: false,
@@ -174,6 +177,9 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.sandbox = options.sandbox ?? false;
 
 		this.init(options, centered);
+		if (options.kiosk) {
+			this.setKiosk(true);
+		}
 	}
 
 	init(
@@ -367,6 +373,14 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 
 	isFullScreen(): boolean {
 		return ffi.request.isWindowFullScreen({ winId: this.id });
+	}
+
+	setKiosk(kiosk: boolean) {
+		return ffi.request.setWindowKiosk({ winId: this.id, kiosk });
+	}
+
+	isKiosk(): boolean {
+		return ffi.request.isWindowKiosk({ winId: this.id });
 	}
 
 	setAlwaysOnTop(alwaysOnTop: boolean) {

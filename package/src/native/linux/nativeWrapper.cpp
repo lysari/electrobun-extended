@@ -289,6 +289,8 @@ struct X11Window {
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
     bool transparent = false;  // Track if window is transparent
+    bool kiosk = false;
+    bool kioskWasFullScreen = false;
 
     X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), closeCallback(nullptr), shouldCloseCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr), transparent(false) {}
 };
@@ -5759,6 +5761,10 @@ static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer u
 // Window delete event callback - handles X button clicks
 static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
+    if (GPOINTER_TO_INT(g_object_get_data(
+            G_OBJECT(widget), "electrobun-kiosk")) != 0) {
+        return TRUE;
+    }
     if (container) {
         if (container->shouldCloseCallback) {
             container->shouldCloseCallback(container->windowId);
@@ -6994,6 +7000,15 @@ gboolean process_x11_events(gpointer data) {
                 continue;
             }
 
+            if (x11win->kiosk && event.type == KeyPress) {
+                const KeySym key = XLookupKeysym(&event.xkey, 0);
+                const bool alt = (event.xkey.state & Mod1Mask) != 0;
+                if (key == XK_Escape || key == XK_Super_L || key == XK_Super_R ||
+                    (alt && (key == XK_F4 || key == XK_Tab))) {
+                    continue;
+                }
+            }
+
             if (x11win->transparent) {
                 CefRefPtr<ElectrobunClient> osrClient = getOSRClientForWindow(windowId);
                 if (osrClient) {
@@ -7004,6 +7019,9 @@ gboolean process_x11_events(gpointer data) {
             switch (event.type) {
                 case ClientMessage:
                     if (event.xclient.data.l[0] == (long)XInternAtom(x11win->display, "WM_DELETE_WINDOW", False)) {
+                        if (x11win->kiosk) {
+                            break;
+                        }
                         if (x11win->shouldCloseCallback) {
                             x11win->shouldCloseCallback(x11win->windowId);
                         } else {
@@ -7501,6 +7519,17 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         // Connect keyboard events
         g_signal_connect(window, "key-press-event", G_CALLBACK(+[](GtkWidget* widget, GdkEventKey* event, gpointer user_data) -> gboolean {
             ContainerView* container = static_cast<ContainerView*>(user_data);
+            const bool kiosk = GPOINTER_TO_INT(
+                g_object_get_data(G_OBJECT(widget), "electrobun-kiosk")) != 0;
+            const bool alt = (event->state & GDK_MOD1_MASK) != 0;
+            if (kiosk &&
+                (event->keyval == GDK_KEY_Escape ||
+                 event->keyval == GDK_KEY_Super_L ||
+                 event->keyval == GDK_KEY_Super_R ||
+                 (alt && (event->keyval == GDK_KEY_F4 ||
+                          event->keyval == GDK_KEY_Tab)))) {
+                return TRUE;
+            }
             if (container && container->keyCallback) {
                 // Convert GDK modifiers to our format
                 uint32_t modifiers = 0;
@@ -11172,81 +11201,151 @@ ELECTROBUN_EXPORT bool isWindowMaximized(void* window) {
     return result;
 }
 
+static void setWindowFullScreenInternal(void* window, bool fullScreen) {
+    if (GTK_IS_WIDGET(window)) {
+        GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+        if (GTK_IS_WINDOW(gtkWindow)) {
+            if (fullScreen) {
+                gtk_window_fullscreen(GTK_WINDOW(gtkWindow));
+            } else {
+                gtk_window_unfullscreen(GTK_WINDOW(gtkWindow));
+            }
+        }
+        return;
+    }
+
+    X11Window* x11win = static_cast<X11Window*>(window);
+    if (!x11win || !x11win->display || !x11win->window) return;
+    Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+    Atom fullscreenAtom = XInternAtom(
+        x11win->display, "_NET_WM_STATE_FULLSCREEN", False);
+
+    XEvent xev = {};
+    xev.type = ClientMessage;
+    xev.xclient.window = x11win->window;
+    xev.xclient.message_type = wmState;
+    xev.xclient.format = 32;
+    xev.xclient.data.l[0] = fullScreen ? 1 : 0;
+    xev.xclient.data.l[1] = fullscreenAtom;
+    XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+        SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+    XFlush(x11win->display);
+}
+
+static bool isWindowFullScreenInternal(void* window) {
+    if (GTK_IS_WIDGET(window)) {
+        GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+        if (!GTK_IS_WINDOW(gtkWindow)) return false;
+        GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
+        if (!gdkWindow) return false;
+        return (gdk_window_get_state(gdkWindow) &
+                GDK_WINDOW_STATE_FULLSCREEN) != 0;
+    }
+
+    X11Window* x11win = static_cast<X11Window*>(window);
+    if (!x11win || !x11win->display || !x11win->window) return false;
+    Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
+    Atom fullscreenAtom = XInternAtom(
+        x11win->display, "_NET_WM_STATE_FULLSCREEN", False);
+    Atom actualType;
+    int actualFormat;
+    unsigned long nItems, bytesAfter;
+    unsigned char* propData = nullptr;
+    bool result = false;
+
+    if (XGetWindowProperty(x11win->display, x11win->window, wmState,
+            0, (~0L), False, XA_ATOM, &actualType, &actualFormat,
+            &nItems, &bytesAfter, &propData) == Success && propData) {
+        Atom* atoms = reinterpret_cast<Atom*>(propData);
+        for (unsigned long i = 0; i < nItems; i++) {
+            if (atoms[i] == fullscreenAtom) {
+                result = true;
+                break;
+            }
+        }
+        XFree(propData);
+    }
+    return result;
+}
+
 ELECTROBUN_EXPORT void setWindowFullScreen(void* window, bool fullScreen) {
     if (!window) return;
 
     dispatch_sync_main_void([&]() {
+        bool kiosk = false;
         if (GTK_IS_WIDGET(window)) {
-            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
-            if (GTK_IS_WINDOW(gtkWindow)) {
-                if (fullScreen) {
-                    gtk_window_fullscreen(GTK_WINDOW(gtkWindow));
-                } else {
-                    gtk_window_unfullscreen(GTK_WINDOW(gtkWindow));
-                }
-            }
+            kiosk = GPOINTER_TO_INT(g_object_get_data(
+                G_OBJECT(window), "electrobun-kiosk")) != 0;
         } else {
-            X11Window* x11win = static_cast<X11Window*>(window);
-            if (x11win && x11win->display && x11win->window) {
-                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
-                Atom fullscreenAtom = XInternAtom(x11win->display, "_NET_WM_STATE_FULLSCREEN", False);
-
-                XEvent xev = {};
-                xev.type = ClientMessage;
-                xev.xclient.window = x11win->window;
-                xev.xclient.message_type = wmState;
-                xev.xclient.format = 32;
-                xev.xclient.data.l[0] = fullScreen ? 1 : 0; // _NET_WM_STATE_ADD or REMOVE
-                xev.xclient.data.l[1] = fullscreenAtom;
-                xev.xclient.data.l[2] = 0;
-                xev.xclient.data.l[3] = 0;
-
-                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
-                    SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-                XFlush(x11win->display);
-            }
+            kiosk = static_cast<X11Window*>(window)->kiosk;
         }
+        if (!fullScreen && kiosk) return;
+        setWindowFullScreenInternal(window, fullScreen);
     });
 }
 
 ELECTROBUN_EXPORT bool isWindowFullScreen(void* window) {
     if (!window) return false;
+    bool result = false;
+    dispatch_sync_main_void([&]() {
+        result = isWindowFullScreenInternal(window);
+    });
+    return result;
+}
 
+ELECTROBUN_EXPORT void setWindowKiosk(void* window, bool kiosk) {
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            bool current = GPOINTER_TO_INT(g_object_get_data(
+                G_OBJECT(window), "electrobun-kiosk")) != 0;
+            if (current == kiosk) return;
+            if (kiosk) {
+                bool wasFullScreen = isWindowFullScreenInternal(window);
+                g_object_set_data(G_OBJECT(window),
+                    "electrobun-kiosk-was-fullscreen",
+                    GINT_TO_POINTER(wasFullScreen ? 1 : 0));
+                g_object_set_data(G_OBJECT(window), "electrobun-kiosk",
+                    GINT_TO_POINTER(1));
+                setWindowFullScreenInternal(window, true);
+            } else {
+                bool wasFullScreen = GPOINTER_TO_INT(g_object_get_data(
+                    G_OBJECT(window),
+                    "electrobun-kiosk-was-fullscreen")) != 0;
+                g_object_set_data(G_OBJECT(window), "electrobun-kiosk", nullptr);
+                if (!wasFullScreen) setWindowFullScreenInternal(window, false);
+                g_object_set_data(G_OBJECT(window),
+                    "electrobun-kiosk-was-fullscreen", nullptr);
+            }
+            return;
+        }
+
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win->kiosk == kiosk) return;
+        if (kiosk) {
+            x11win->kioskWasFullScreen = isWindowFullScreenInternal(window);
+            x11win->kiosk = true;
+            setWindowFullScreenInternal(window, true);
+        } else {
+            x11win->kiosk = false;
+            if (!x11win->kioskWasFullScreen) {
+                setWindowFullScreenInternal(window, false);
+            }
+            x11win->kioskWasFullScreen = false;
+        }
+    });
+}
+
+ELECTROBUN_EXPORT bool isWindowKiosk(void* window) {
+    if (!window) return false;
     bool result = false;
     dispatch_sync_main_void([&]() {
         if (GTK_IS_WIDGET(window)) {
-            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
-            if (GTK_IS_WINDOW(gtkWindow)) {
-                GdkWindow* gdkWindow = gtk_widget_get_window(gtkWindow);
-                if (gdkWindow) {
-                    GdkWindowState state = gdk_window_get_state(gdkWindow);
-                    result = (state & GDK_WINDOW_STATE_FULLSCREEN) != 0;
-                }
-            }
+            result = GPOINTER_TO_INT(g_object_get_data(
+                G_OBJECT(window), "electrobun-kiosk")) != 0;
         } else {
-            X11Window* x11win = static_cast<X11Window*>(window);
-            if (x11win && x11win->display && x11win->window) {
-                Atom wmState = XInternAtom(x11win->display, "_NET_WM_STATE", False);
-                Atom fullscreenAtom = XInternAtom(x11win->display, "_NET_WM_STATE_FULLSCREEN", False);
-
-                Atom actualType;
-                int actualFormat;
-                unsigned long nItems, bytesAfter;
-                unsigned char* propData = nullptr;
-
-                if (XGetWindowProperty(x11win->display, x11win->window, wmState,
-                        0, (~0L), False, XA_ATOM, &actualType, &actualFormat,
-                        &nItems, &bytesAfter, &propData) == Success && propData) {
-                    Atom* atoms = reinterpret_cast<Atom*>(propData);
-                    for (unsigned long i = 0; i < nItems; i++) {
-                        if (atoms[i] == fullscreenAtom) {
-                            result = true;
-                            break;
-                        }
-                    }
-                    XFree(propData);
-                }
-            }
+            result = static_cast<X11Window*>(window)->kiosk;
         }
     });
     return result;

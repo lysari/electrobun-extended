@@ -355,6 +355,7 @@ type WindowOptions struct {
 	Style              WindowStyle
 	TitleBarStyle      string
 	Transparent        bool
+	Kiosk             bool
 	Hidden             bool
 	Activate           bool
 	Centered           bool
@@ -694,6 +695,8 @@ var requiredSymbols = []string{
 	"isWindowMaximized",
 	"setWindowFullScreen",
 	"isWindowFullScreen",
+	"setWindowKiosk",
+	"isWindowKiosk",
 	"setWindowAlwaysOnTop",
 	"isWindowAlwaysOnTop",
 	"setWindowVisibleOnAllWorkspaces",
@@ -888,6 +891,11 @@ func (c *Core) CreateWindow(options WindowOptions) (uint32, error) {
 		return 0, errors.New(c.LastError())
 	}
 	registerWindowCallbacks(uint32(windowID), options.Callbacks)
+	if options.Kiosk {
+		if err := c.SetWindowKiosk(uint32(windowID), true); err != nil {
+			return uint32(windowID), err
+		}
+	}
 	return uint32(windowID), nil
 }
 
@@ -936,6 +944,15 @@ func (c *Core) SetWindowFullScreen(windowID uint32, fullScreen bool) error {
 
 func (c *Core) IsWindowFullScreen(windowID uint32) bool {
 	return bool(C.eb_call_u32_bool_ret(c.symbol("isWindowFullScreen"), C.uint32_t(windowID)))
+}
+
+func (c *Core) SetWindowKiosk(windowID uint32, kiosk bool) error {
+	C.eb_call_u32_bool(c.symbol("setWindowKiosk"), C.uint32_t(windowID), cbool(kiosk))
+	return c.ensureLastCallSucceeded()
+}
+
+func (c *Core) IsWindowKiosk(windowID uint32) bool {
+	return bool(C.eb_call_u32_bool_ret(c.symbol("isWindowKiosk"), C.uint32_t(windowID)))
 }
 
 func (c *Core) SetWindowAlwaysOnTop(windowID uint32, alwaysOnTop bool) error {

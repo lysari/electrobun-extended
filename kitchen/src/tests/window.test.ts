@@ -400,6 +400,49 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window kiosk mode",
+    category: "BrowserWindow",
+    description: "Test restricted fullscreen kiosk mode and state restoration",
+    timeout: 20000,
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Kiosk Test",
+        renderer: "cef",
+        kiosk: true,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      log("Checking constructor kiosk state");
+      expect(win.window.isKiosk()).toBe(true);
+      expect(win.window.isFullScreen()).toBe(true);
+
+      log("Verifying fullscreen cannot be exited while kiosk is active");
+      win.window.setFullScreen(false);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(win.window.isKiosk()).toBe(true);
+      expect(win.window.isFullScreen()).toBe(true);
+
+      log("Leaving kiosk mode");
+      win.window.setKiosk(false);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(win.window.isKiosk()).toBe(false);
+      expect(win.window.isFullScreen()).toBe(false);
+
+      log("Verifying a pre-existing fullscreen state survives kiosk exit");
+      win.window.setFullScreen(true);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      win.window.setKiosk(true);
+      expect(win.window.isKiosk()).toBe(true);
+      win.window.setKiosk(false);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(win.window.isKiosk()).toBe(false);
+      expect(win.window.isFullScreen()).toBe(true);
+      win.window.setFullScreen(false);
+    },
+  }),
+
+  defineTest({
     name: "Window alwaysOnTop",
     category: "BrowserWindow",
     description: "Test window always-on-top behavior",

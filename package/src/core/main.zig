@@ -2660,6 +2660,20 @@ export fn isWindowFullScreen(window_id: u32) bool {
     return is_window_full_screen(window);
 }
 
+export fn setWindowKiosk(window_id: u32, kiosk: bool) void {
+    const SetWindowKioskFn = *const fn (WindowPtr, bool) callconv(.c) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const set_window_kiosk = lookupNativeSymbol(SetWindowKioskFn, "setWindowKiosk") orelse return;
+    set_window_kiosk(window, kiosk);
+}
+
+export fn isWindowKiosk(window_id: u32) bool {
+    const IsWindowKioskFn = *const fn (WindowPtr) callconv(.c) bool;
+    const window = lookupWindowPtr(window_id) orelse return false;
+    const is_window_kiosk = lookupNativeSymbol(IsWindowKioskFn, "isWindowKiosk") orelse return false;
+    return is_window_kiosk(window);
+}
+
 export fn setWindowAlwaysOnTop(window_id: u32, always_on_top: bool) void {
     const SetWindowAlwaysOnTopFn = *const fn (WindowPtr, bool) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;

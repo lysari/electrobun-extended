@@ -267,6 +267,14 @@ const core = (() => {
 				args: [FFIType.u32],
 				returns: FFIType.bool,
 			},
+			setWindowKiosk: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowKiosk: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
 			setWindowAlwaysOnTop: {
 				args: [FFIType.u32, FFIType.bool],
 				returns: FFIType.void,
@@ -1683,6 +1691,28 @@ const _ffiImpl = {
 			}
 
 			return core_.symbols.isWindowFullScreen(winId);
+		},
+
+		setWindowKiosk: (params: { winId: number; kiosk: boolean }) => {
+			const { winId, kiosk } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				throw `Can't set kiosk mode. Window no longer exists`;
+			}
+
+			core_.symbols.setWindowKiosk(winId, kiosk);
+		},
+
+		isWindowKiosk: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				return false;
+			}
+
+			return core_.symbols.isWindowKiosk(winId);
 		},
 
 		setWindowAlwaysOnTop: (params: { winId: number; alwaysOnTop: boolean }) => {

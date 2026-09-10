@@ -294,6 +294,7 @@ pub struct WindowOptions<'a> {
     pub style: WindowStyle,
     pub title_bar_style: &'a str,
     pub transparent: bool,
+    pub kiosk: bool,
     pub hidden: bool,
     pub activate: bool,
     pub centered: bool,
@@ -309,6 +310,7 @@ impl<'a> WindowOptions<'a> {
             style: WindowStyle::standard(),
             title_bar_style: "default",
             transparent: false,
+            kiosk: false,
             hidden: false,
             activate: true,
             centered: false,
@@ -861,6 +863,8 @@ struct Symbols {
     is_window_maximized: IsWindowMaximizedFn,
     set_window_full_screen: SetWindowFullScreenFn,
     is_window_full_screen: IsWindowFullScreenFn,
+    set_window_kiosk: SetWindowFullScreenFn,
+    is_window_kiosk: IsWindowFullScreenFn,
     set_window_always_on_top: SetWindowAlwaysOnTopFn,
     is_window_always_on_top: IsWindowAlwaysOnTopFn,
     set_window_visible_on_all_workspaces: SetWindowVisibleOnAllWorkspacesFn,
@@ -996,6 +1000,8 @@ impl Core {
             is_window_maximized: lib.symbol("isWindowMaximized")?,
             set_window_full_screen: lib.symbol("setWindowFullScreen")?,
             is_window_full_screen: lib.symbol("isWindowFullScreen")?,
+            set_window_kiosk: lib.symbol("setWindowKiosk")?,
+            is_window_kiosk: lib.symbol("isWindowKiosk")?,
             set_window_always_on_top: lib.symbol("setWindowAlwaysOnTop")?,
             is_window_always_on_top: lib.symbol("isWindowAlwaysOnTop")?,
             set_window_visible_on_all_workspaces: lib.symbol("setWindowVisibleOnAllWorkspaces")?,
@@ -1198,6 +1204,12 @@ impl Core {
         if window_id == 0 {
             return Err(self.last_error());
         }
+        if options.kiosk {
+            unsafe {
+                (self.symbols.set_window_kiosk)(window_id, true);
+            }
+            self.ensure_last_call_succeeded()?;
+        }
         Ok(window_id)
     }
 
@@ -1254,6 +1266,17 @@ impl Core {
 
     pub fn is_window_full_screen(&self, window_id: u32) -> bool {
         unsafe { (self.symbols.is_window_full_screen)(window_id) }
+    }
+
+    pub fn set_window_kiosk(&self, window_id: u32, kiosk: bool) -> Result<(), String> {
+        unsafe {
+            (self.symbols.set_window_kiosk)(window_id, kiosk);
+        }
+        self.ensure_last_call_succeeded()
+    }
+
+    pub fn is_window_kiosk(&self, window_id: u32) -> bool {
+        unsafe { (self.symbols.is_window_kiosk)(window_id) }
     }
 
     pub fn set_window_always_on_top(

@@ -152,6 +152,7 @@ with no argument uses the legacy starter window: title `"Electrobun"`, size
 | `transparent` | `boolean` | `false` | Make the native window background transparent. |
 | `passthrough` | `boolean` | `false` | Pass pointer input through transparent regions. |
 | `spellCheck` | `boolean` | `false` | Enable native spell checking where supported. |
+| `kiosk` | `boolean` | `false` | Start in restricted fullscreen kiosk mode. |
 | `hidden` | `boolean` | `false` | Create without showing the window. |
 | `activate` | `boolean` | `true` | Activate the window when it is created. |
 | `trafficLightOffset` | `{ x: number; y: number }` | `{ x: 0, y: 0 }` | macOS traffic-light offset. |
@@ -212,6 +213,10 @@ const maximized = win.isMaximized();
 win.setFullScreen(true);
 const fullScreen = win.isFullScreen();
 
+win.setKiosk(true);
+const kiosk = win.isKiosk();
+win.setKiosk(false);
+
 win.setAlwaysOnTop(true);
 const alwaysOnTop = win.isAlwaysOnTop();
 
@@ -225,11 +230,24 @@ void visible;
 void minimized;
 void maximized;
 void fullScreen;
+void kiosk;
 void alwaysOnTop;
 void onAllWorkspaces;
 ```
 
 `focus()` remains as a deprecated alias for `activate()`.
+
+Kiosk mode is restricted fullscreen intended for unattended displays and
+terminals. While it is active, Electrobun blocks the usual keyboard shortcuts
+that leave fullscreen, hide, minimize, or close the window. On macOS it also
+hides the Dock and menu bar and disables app switching, Force Quit, and session
+termination UI. Call `setKiosk(false)` before attempting to leave fullscreen.
+If the window was already fullscreen when kiosk mode began, it remains
+fullscreen when kiosk mode ends.
+
+Kiosk mode is an application-level control, not an operating-system security
+boundary. For a locked public terminal, combine it with the platform's managed
+kiosk or assigned-access facilities.
 
 ## Title, position, and size
 
@@ -325,6 +343,7 @@ The current public control surface is:
   `hide`, `isVisible`.
 - Window state: `minimize`, `unminimize`, `isMinimized`, `maximize`,
   `unmaximize`, `isMaximized`, `setFullScreen`, `isFullScreen`,
+  `setKiosk`, `isKiosk`,
   `setAlwaysOnTop`, `isAlwaysOnTop`, `setVisibleOnAllWorkspaces`,
   `isVisibleOnAllWorkspaces`.
 - Geometry: `setPosition`, `center`, `setSize`, `setFrame`, `getFrame`,
@@ -346,7 +365,7 @@ language:
 | `win.setTitle(t)` | `setWindowTitle(id, t)` | `set_window_title(id, t)` | `SetWindowTitle(id, t)` |
 | `win.show()` / `hide()` / `isVisible()` | `showWindow(id, activate)` / `hideWindow` / `isWindowVisible` | `show_window` / `hide_window` / `is_window_visible` | `ShowWindow` / `HideWindow` / `IsWindowVisible` |
 | `win.minimize()` ... `isMaximized()` | `minimizeWindow` / `restoreWindow` / `maximizeWindow` / `unmaximizeWindow` + `is...` | snake_case equivalents | CamelCase equivalents |
-| `win.setFullScreen(b)` / `setAlwaysOnTop(b)` / `setVisibleOnAllWorkspaces(b)` | `setWindowFullScreen` etc. | `set_window_full_screen` etc. | `SetWindowFullScreen` etc. |
+| `win.setFullScreen(b)` / `setKiosk(b)` / `setAlwaysOnTop(b)` / `setVisibleOnAllWorkspaces(b)` | `setWindowFullScreen` / `setWindowKiosk` etc. | `set_window_full_screen` / `set_window_kiosk` etc. | `SetWindowFullScreen` / `SetWindowKiosk` etc. |
 | `win.setPosition` / `setSize` / `setFrame` / `getFrame` / `center` | `setWindowPosition` / `setWindowSize` / `setWindowFrame` / `getWindowFrame` / `centerWindow` | snake_case | CamelCase |
 | `win.setWindowButtonPosition` / `get...` | same names (`core`-level) | snake_case | CamelCase |
 | `win.close()` / `requestClose()` | `closeWindow` / `requestWindowClose` | `close_window` / `request_window_close` | `CloseWindow` / `RequestWindowClose` |

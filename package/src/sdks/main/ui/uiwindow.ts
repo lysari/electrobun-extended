@@ -53,6 +53,8 @@ export interface UIWindowOptions extends UIMountOptions {
 	 */
 	transparent?: boolean;
 	alwaysOnTop?: boolean;
+	/** Start the GPU window in restricted fullscreen kiosk mode. */
+	kiosk?: boolean;
 }
 
 export interface UIMount {
@@ -390,6 +392,7 @@ export async function createUIWindow(
 		// cursor-to-local math needs no title-bar offset.
 		titleBarStyle: options.titleBarStyle ?? "hiddenInset",
 		transparent: options.transparent ?? false,
+		kiosk: options.kiosk ?? false,
 	});
 	const closeEvent = `close-${win.id}`;
 	const lifecycle = createWindowMountLifecycle({

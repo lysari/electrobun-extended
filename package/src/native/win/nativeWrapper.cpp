@@ -5590,8 +5590,13 @@ typedef struct {
     WindowKeyHandler keyHandler;
     ChromeStyle chromeStyle;
     bool bypassShouldClose;
+    bool kiosk;
+    bool kioskWasFullScreen;
     wchar_t pendingHighSurrogate;
 } WindowData;
+
+static std::map<HWND, WINDOWPLACEMENT> g_fullScreenSavedPlacements;
+static std::map<HWND, LONG> g_fullScreenSavedStyles;
 
 // Text produced by TranslateMessage/WM_CHAR, after Windows has applied the
 // active keyboard layout, dead keys, and IME composition. The value is one
@@ -5969,6 +5974,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_SYSKEYUP:
         case WM_SYSCHAR:
             {
+                if (data && data->kiosk &&
+                    (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) &&
+                    (wParam == VK_ESCAPE || wParam == VK_LWIN ||
+                     wParam == VK_RWIN ||
+                     (msg == WM_SYSKEYDOWN &&
+                      (wParam == VK_F4 || wParam == VK_TAB)))) {
+                    return 0;
+                }
+
                 // Check if this window has a CEF OSR view
                 auto viewIt = g_cefViews.find(hwnd);
                 if (viewIt != g_cefViews.end()) {
@@ -6006,6 +6020,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CLOSE:
             if (g_eventLoopStopping.load()) {
                 DestroyWindow(hwnd);
+                return 0;
+            }
+            if (data && data->kiosk && !data->bypassShouldClose) {
                 return 0;
             }
             if (data && data->shouldCloseHandler && !data->bypassShouldClose) {
@@ -6129,6 +6146,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 g_applicationMenu = NULL;
             }
             g_appMenuTarget.reset();
+            g_fullScreenSavedPlacements.erase(hwnd);
+            g_fullScreenSavedStyles.erase(hwnd);
             {
                 std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
                 g_visibleOnAllWorkspaces.erase(hwnd);
@@ -11135,6 +11154,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->blurHandler = zigBlurHandler;
         data->keyHandler = zigKeyHandler;
         data->bypassShouldClose = false;
+        data->kiosk = false;
+        data->kioskWasFullScreen = false;
         data->pendingHighSurrogate = 0;
 
         // Map style mask to Windows style
@@ -11483,6 +11504,52 @@ ELECTROBUN_EXPORT bool isWindowMaximized(NSWindow *window) {
     return IsZoomed(hwnd) != 0;
 }
 
+static bool isWindowFullScreenInternal(HWND hwnd) {
+    // WS_POPUP also represents ordinary custom-chrome windows, so style bits
+    // alone cannot distinguish them from fullscreen. Presence in the restore
+    // map is the authoritative state for transitions managed by Electrobun.
+    return g_fullScreenSavedStyles.find(hwnd) != g_fullScreenSavedStyles.end();
+}
+
+static void setWindowFullScreenInternal(HWND hwnd, bool fullScreen) {
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    bool isCurrentlyFullScreen = isWindowFullScreenInternal(hwnd);
+
+    if (fullScreen && !isCurrentlyFullScreen) {
+        WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+        GetWindowPlacement(hwnd, &wp);
+        g_fullScreenSavedPlacements[hwnd] = wp;
+        g_fullScreenSavedStyles[hwnd] = style;
+
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = { sizeof(MONITORINFO) };
+        GetMonitorInfo(monitor, &mi);
+
+        SetWindowLong(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW | WS_POPUP);
+        SetWindowPos(hwnd, HWND_TOP,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    } else if (!fullScreen && isCurrentlyFullScreen) {
+        auto styleIt = g_fullScreenSavedStyles.find(hwnd);
+        if (styleIt != g_fullScreenSavedStyles.end()) {
+            SetWindowLong(hwnd, GWL_STYLE, styleIt->second);
+            g_fullScreenSavedStyles.erase(styleIt);
+        }
+
+        auto placementIt = g_fullScreenSavedPlacements.find(hwnd);
+        if (placementIt != g_fullScreenSavedPlacements.end()) {
+            SetWindowPlacement(hwnd, &placementIt->second);
+            g_fullScreenSavedPlacements.erase(placementIt);
+        }
+
+        SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+}
+
 ELECTROBUN_EXPORT void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     HWND hwnd = reinterpret_cast<HWND>(window);
 
@@ -11492,48 +11559,10 @@ ELECTROBUN_EXPORT void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     }
 
     MainThreadDispatcher::dispatch_sync([=]() {
-        static std::map<HWND, WINDOWPLACEMENT> savedPlacements;
-        static std::map<HWND, LONG> savedStyles;
-
-        LONG style = GetWindowLong(hwnd, GWL_STYLE);
-        bool isCurrentlyFullScreen = (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
-
-        if (fullScreen && !isCurrentlyFullScreen) {
-            // Save current state
-            WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
-            GetWindowPlacement(hwnd, &wp);
-            savedPlacements[hwnd] = wp;
-            savedStyles[hwnd] = style;
-
-            // Get the monitor info for the window
-            HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            MONITORINFO mi = { sizeof(MONITORINFO) };
-            GetMonitorInfo(monitor, &mi);
-
-            // Remove window decorations and set to fullscreen
-            SetWindowLong(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW | WS_POPUP);
-            SetWindowPos(hwnd, HWND_TOP,
-                mi.rcMonitor.left, mi.rcMonitor.top,
-                mi.rcMonitor.right - mi.rcMonitor.left,
-                mi.rcMonitor.bottom - mi.rcMonitor.top,
-                SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-        } else if (!fullScreen && isCurrentlyFullScreen) {
-            // Restore saved state
-            auto styleIt = savedStyles.find(hwnd);
-            if (styleIt != savedStyles.end()) {
-                SetWindowLong(hwnd, GWL_STYLE, styleIt->second);
-                savedStyles.erase(styleIt);
-            }
-
-            auto placementIt = savedPlacements.find(hwnd);
-            if (placementIt != savedPlacements.end()) {
-                SetWindowPlacement(hwnd, &placementIt->second);
-                savedPlacements.erase(placementIt);
-            }
-
-            SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-        }
+        WindowData* data =
+            (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (!fullScreen && data && data->kiosk) return;
+        setWindowFullScreenInternal(hwnd, fullScreen);
     });
 }
 
@@ -11544,8 +11573,45 @@ ELECTROBUN_EXPORT bool isWindowFullScreen(NSWindow *window) {
         return false;
     }
 
-    LONG style = GetWindowLong(hwnd, GWL_STYLE);
-    return (style & WS_POPUP) && !(style & WS_OVERLAPPEDWINDOW);
+    return MainThreadDispatcher::dispatch_sync([=]() -> bool {
+        return isWindowFullScreenInternal(hwnd);
+    });
+}
+
+ELECTROBUN_EXPORT void setWindowKiosk(NSWindow *window, bool kiosk) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setWindowKiosk");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        WindowData* data =
+            (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (!data || data->kiosk == kiosk) return;
+
+        if (kiosk) {
+            data->kioskWasFullScreen = isWindowFullScreenInternal(hwnd);
+            data->kiosk = true;
+            setWindowFullScreenInternal(hwnd, true);
+        } else {
+            data->kiosk = false;
+            if (!data->kioskWasFullScreen) {
+                setWindowFullScreenInternal(hwnd, false);
+            }
+            data->kioskWasFullScreen = false;
+        }
+    });
+}
+
+ELECTROBUN_EXPORT bool isWindowKiosk(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return false;
+    return MainThreadDispatcher::dispatch_sync([=]() -> bool {
+        WindowData* data =
+            (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        return data && data->kiosk;
+    });
 }
 
 ELECTROBUN_EXPORT void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {

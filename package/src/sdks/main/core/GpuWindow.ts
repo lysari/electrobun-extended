@@ -20,6 +20,8 @@ export type GpuWindowOptionsType = {
 	styleMask?: {};
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
 	transparent: boolean;
+	/** Start the window in restricted fullscreen kiosk mode. */
+	kiosk: boolean;
 };
 
 const defaultOptions: GpuWindowOptionsType = {
@@ -30,6 +32,7 @@ const defaultOptions: GpuWindowOptionsType = {
 	},
 	titleBarStyle: "default",
 	transparent: false,
+	kiosk: false,
 };
 
 const buildConfig = BuildConfig.getSync();
@@ -96,6 +99,9 @@ export class GpuWindow {
 		};
 
 		this.init(options, centered);
+		if (options.kiosk) {
+			this.setKiosk(true);
+		}
 	}
 
 	init(
@@ -265,6 +271,14 @@ export class GpuWindow {
 
 	isFullScreen(): boolean {
 		return ffi.request.isWindowFullScreen({ winId: this.id });
+	}
+
+	setKiosk(kiosk: boolean) {
+		return ffi.request.setWindowKiosk({ winId: this.id, kiosk });
+	}
+
+	isKiosk(): boolean {
+		return ffi.request.isWindowKiosk({ winId: this.id });
 	}
 
 	setAlwaysOnTop(alwaysOnTop: boolean) {

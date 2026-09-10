@@ -510,6 +510,50 @@ static const void *kTrafficLightDefaultPositionXKey = &kTrafficLightDefaultPosit
 static const void *kTrafficLightDefaultPositionYKey = &kTrafficLightDefaultPositionYKey;
 
 static const void *kTrafficLightTitleBarStyleKey = &kTrafficLightTitleBarStyleKey;
+static const void *kWindowKioskModeKey = &kWindowKioskModeKey;
+static const void *kWindowKioskWasFullScreenKey = &kWindowKioskWasFullScreenKey;
+
+static NSMutableSet<NSValue *> *gKioskWindows = nil;
+static NSApplicationPresentationOptions gPresentationOptionsBeforeKiosk =
+    NSApplicationPresentationDefault;
+
+static bool isWindowKioskInternal(NSWindow *window) {
+    NSNumber *value = objc_getAssociatedObject(window, kWindowKioskModeKey);
+    return value != nil && value.boolValue;
+}
+
+static void updateKioskPresentation(NSWindow *window, bool kiosk) {
+    if (!gKioskWindows) {
+        gKioskWindows = [[NSMutableSet alloc] init];
+    }
+
+    NSValue *windowValue = [NSValue valueWithNonretainedObject:window];
+    if (kiosk) {
+        if (gKioskWindows.count == 0) {
+            gPresentationOptionsBeforeKiosk = NSApp.presentationOptions;
+        }
+        [gKioskWindows addObject:windowValue];
+
+        // AppKit rejects auto-hide and fully-hidden variants when combined.
+        NSApplicationPresentationOptions options = gPresentationOptionsBeforeKiosk;
+        options &= ~(NSApplicationPresentationAutoHideDock |
+                     NSApplicationPresentationAutoHideMenuBar);
+        options |= NSApplicationPresentationHideDock |
+                   NSApplicationPresentationHideMenuBar |
+                   NSApplicationPresentationDisableAppleMenu |
+                   NSApplicationPresentationDisableProcessSwitching |
+                   NSApplicationPresentationDisableForceQuit |
+                   NSApplicationPresentationDisableSessionTermination |
+                   NSApplicationPresentationDisableHideApplication |
+                   NSApplicationPresentationDisableMenuBarTransparency;
+        NSApp.presentationOptions = options;
+    } else {
+        [gKioskWindows removeObject:windowValue];
+        if (gKioskWindows.count == 0) {
+            NSApp.presentationOptions = gPresentationOptionsBeforeKiosk;
+        }
+    }
+}
 
 static void applyWindowButtonPosition(NSWindow *window, double x, double y);
 
@@ -4690,6 +4734,25 @@ extern "C" void wgpuToggleGPUTestShader(AbstractView* abstractView) {
         handlingSendEvent_ = handlingSendEvent;
     }
     - (void)sendEvent:(NSEvent*)event {
+        if (event.type == NSEventTypeKeyDown &&
+            isWindowKioskInternal(self.keyWindow)) {
+            const NSEventModifierFlags flags =
+                event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+            const BOOL command = (flags & NSEventModifierFlagCommand) != 0;
+            const BOOL control = (flags & NSEventModifierFlagControl) != 0;
+            const unsigned short keyCode = event.keyCode;
+
+            // Do not let standard system shortcuts escape, hide, minimize, or
+            // close a kiosk window. Programmatic APIs remain available.
+            if (keyCode == 53 || // Escape
+                (command && control && keyCode == 3) || // Cmd+Ctrl+F
+                (command && (keyCode == 12 || // Q
+                             keyCode == 4 ||  // H
+                             keyCode == 46 || // M
+                             keyCode == 13))) { // W
+                return;
+            }
+        }
         CefScopedSendingEvent sendingEventScoper;
         [super sendEvent:event];
     }
@@ -7138,6 +7201,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 @implementation WindowDelegate
     - (BOOL)windowShouldClose:(NSWindow *)sender {
+        if (isWindowKioskInternal(sender)) {
+            return NO;
+        }
         if (self.shouldCloseHandler) {
             self.shouldCloseHandler(self.windowId);
             return NO;
@@ -7146,8 +7212,21 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
     - (void)windowWillClose:(NSNotification *)notification {
         NSWindow *window = [notification object];
+        if (isWindowKioskInternal(window)) {
+            objc_setAssociatedObject(window, kWindowKioskModeKey, @NO,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            updateKioskPresentation(window, false);
+        }
         if (self.closeHandler) {
             self.closeHandler(self.windowId);
+        }
+    }
+    - (void)windowDidEnterFullScreen:(NSNotification *)notification {
+        NSWindow *window = [notification object];
+        if (isWindowKioskInternal(window)) {
+            // AppKit updates presentation options during the fullscreen
+            // transition, so reapply the stricter kiosk options afterward.
+            updateKioskPresentation(window, true);
         }
     }
     - (void)windowDidResize:(NSNotification *)notification {
@@ -7189,6 +7268,12 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
     - (void)windowDidExitFullScreen:(NSNotification *)notification {
         NSWindow *window = [notification object];
+        if (isWindowKioskInternal(window)) {
+            // Keep kiosk invariant even if AppKit exits fullscreen through a
+            // system gesture that did not pass through sendEvent:.
+            [window toggleFullScreen:nil];
+            return;
+        }
         if (self.hasCustomButtonPosition) {
             applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
             [[window standardWindowButton:NSWindowCloseButton] setHidden:NO];
@@ -8164,6 +8249,9 @@ extern "C" bool isWindowMaximized(NSWindow *window) {
 
 extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
     runOnMainThreadSyncVoid(^{
+        if (!fullScreen && isWindowKioskInternal(window)) {
+            return;
+        }
         bool isCurrentlyFullScreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         if (fullScreen != isCurrentlyFullScreen) {
             [window toggleFullScreen:nil];
@@ -8174,6 +8262,44 @@ extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
 extern "C" bool isWindowFullScreen(NSWindow *window) {
     return runOnMainThreadSyncBool(^{
         return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+    });
+}
+
+extern "C" void setWindowKiosk(NSWindow *window, bool kiosk) {
+    runOnMainThreadSyncVoid(^{
+        if (!window || kiosk == isWindowKioskInternal(window)) {
+            return;
+        }
+
+        const bool isFullScreen =
+            ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+        objc_setAssociatedObject(window, kWindowKioskModeKey, @(kiosk),
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        if (kiosk) {
+            objc_setAssociatedObject(window, kWindowKioskWasFullScreenKey,
+                                     @(isFullScreen),
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            updateKioskPresentation(window, true);
+            if (!isFullScreen) {
+                [window toggleFullScreen:nil];
+            }
+        } else {
+            NSNumber *wasFullScreen = objc_getAssociatedObject(
+                window, kWindowKioskWasFullScreenKey);
+            updateKioskPresentation(window, false);
+            if (!(wasFullScreen && wasFullScreen.boolValue) && isFullScreen) {
+                [window toggleFullScreen:nil];
+            }
+            objc_setAssociatedObject(window, kWindowKioskWasFullScreenKey, nil,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    });
+}
+
+extern "C" bool isWindowKiosk(NSWindow *window) {
+    return runOnMainThreadSyncBool(^{
+        return isWindowKioskInternal(window);
     });
 }
 

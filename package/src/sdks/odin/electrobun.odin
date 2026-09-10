@@ -230,6 +230,7 @@ WindowOptions :: struct {
 	style:                WindowStyle,
 	title_bar_style:      string,
 	transparent:          bool,
+	kiosk:                bool,
 	hidden:               bool,
 	activate:             bool,
 	centered:             bool,
@@ -904,6 +905,8 @@ Symbols :: struct {
 	isWindowMaximized:                      WindowIdBoolFn,
 	setWindowFullScreen:                    SetWindowBoolFn,
 	isWindowFullScreen:                     WindowIdBoolFn,
+	setWindowKiosk:                        SetWindowBoolFn,
+	isWindowKiosk:                         WindowIdBoolFn,
 	setWindowAlwaysOnTop:                   SetWindowBoolFn,
 	isWindowAlwaysOnTop:                    WindowIdBoolFn,
 	setWindowVisibleOnAllWorkspaces:        SetWindowBoolFn,
@@ -1154,6 +1157,12 @@ createWindow :: proc(self: ^Core, options: WindowOptions) -> (window_id: u32, er
 	if window_id == 0 {
 		return 0, error_from_last_error(last_error_string(self))
 	}
+	if options.kiosk {
+		self.symbols.setWindowKiosk(window_id, true)
+		if kiosk_err := ensure_last_call_succeeded(self); kiosk_err != .None {
+			return window_id, kiosk_err
+		}
+	}
 	return window_id, .None
 }
 
@@ -1199,6 +1208,15 @@ setWindowFullScreen :: proc(self: ^Core, window_id: u32, full_screen: bool) -> E
 
 isWindowFullScreen :: proc(self: ^Core, window_id: u32) -> bool {
 	return self.symbols.isWindowFullScreen(window_id)
+}
+
+setWindowKiosk :: proc(self: ^Core, window_id: u32, kiosk: bool) -> Error {
+	self.symbols.setWindowKiosk(window_id, kiosk)
+	return ensure_last_call_succeeded(self)
+}
+
+isWindowKiosk :: proc(self: ^Core, window_id: u32) -> bool {
+	return self.symbols.isWindowKiosk(window_id)
 }
 
 setWindowAlwaysOnTop :: proc(self: ^Core, window_id: u32, always_on_top: bool) -> Error {

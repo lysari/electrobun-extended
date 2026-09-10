@@ -97,6 +97,7 @@ export class TestExecutor {
           sandbox: options.sandbox || false,
           allowedProtocols: options.allowedProtocols,
           spellCheck: options.spellCheck ?? false,
+          kiosk: options.kiosk ?? false,
         });
 
         // Wait a bit for window to be created

@@ -93,6 +93,7 @@ const win = new GpuWindow({
 win.showInactive();
 win.activate();
 win.setAlwaysOnTop(true);
+win.setKiosk(true);
 win.setSize(1024, 720);
 win.setPosition(200, 140);
 win.setWindowButtonPosition(16, 12);
@@ -102,8 +103,14 @@ console.log({
   minimized: win.isMinimized(),
   maximized: win.isMaximized(),
   fullScreen: win.isFullScreen(),
+  kiosk: win.isKiosk(),
 });
 ```
+
+Pass `kiosk: true` to the constructor to start in kiosk mode, or use
+`setKiosk()` to toggle it later. See the
+[BrowserWindow kiosk notes](/electrobun/apis/browser-window/#window-lifecycle)
+for platform behavior and security limitations.
 
 `trafficLightOffset` and `setWindowButtonPosition()` affect macOS windows with
 `titleBarStyle: "hiddenInset"`; they are ignored on Windows and Linux.
